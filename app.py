@@ -98,7 +98,6 @@ def train_action_net():
     }
 
 
-# --- Tractor net stays (as requested), but route is deterministic snake --- #
 
 def build_tractor_net():
     m = Sequential([
@@ -133,7 +132,7 @@ def train_tractor_net():
 
 
 def tractor_route_snake(H, W):
-    """Deterministic snake route visiting every cell exactly once."""
+
     path = []
     for r in range(H):
         if r % 2 == 0:
@@ -155,7 +154,7 @@ st.set_page_config(layout="wide")
 st.title("Автоматизация сельскохозяйственных операций")
 
 df,regions,scalers,action_model,_ = train_action_net()
-tractor_model = train_tractor_net()  # model remains, even if route is deterministic
+tractor_model = train_tractor_net()
 
 c1,c2,c3 = st.columns(3)
 w = c1.number_input("Ширина поля (м)",1,1_000_000,200,10)
@@ -185,7 +184,6 @@ if st.button("Сгенерировать"):
         axs.flat[i].axis("off")
     st.pyplot(fig1,clear_figure=True)
 
-    # deterministic route (no breaks)
     p = tractor_route_snake(H,W)
 
     fig2,ax = plt.subplots(figsize=(9,9))
