@@ -106,19 +106,12 @@ def grid_size(w,h,spm):
     s=max(1,int(np.ceil(max(H0/MAX_SIDE,W0/MAX_SIDE))))
     return max(1,H0//s),max(1,W0//s),s/spm
 
-
-# ============================================================
-# ЛОГИСТИКА: "ЗАПАСЫ СЛЕВА ОТ ПОЛЯ" (колонка c=-1)
-# ============================================================
-
 DIRS4 = [(-1,0),(1,0),(0,-1),(0,1)]
 
 def in_bounds_ext(r,c,H,W):
-    # разрешаем c=-1 (служебная полоса запасов), а в поле c in [0..W-1]
     return 0 <= r < H and (-1 <= c < W)
 
 def manhattan_path_ext(a, b):
-    """Кратчайший путь без препятствий, поддерживает c=-1."""
     (r1,c1),(r2,c2) = a,b
     path=[(r1,c1)]
     r,c=r1,c1
@@ -132,12 +125,6 @@ def manhattan_path_ext(a, b):
 
 
 def smart_snake_route_for_mask(mask2d):
-    """
-    "Немного умная" змейка для одной операции:
-    - в каждой строке идём только по отрезку [min..max], где есть работа
-    - строки берём только те, где есть работа
-    Возвращает маршрут внутри поля (c>=0)
-    """
     H,W = mask2d.shape
     if not mask2d.any():
         return [(0,0)]
@@ -176,17 +163,6 @@ def smart_snake_route_for_mask(mask2d):
 
 
 def add_refills_to_route(base_route, work_mask, capacity, refill_left_col=-1):
-    """
-    base_route: маршрут по полю (r,c) c>=0
-    work_mask: (H,W) bool — где реально нужна эта операция
-    capacity: сколько клеток можно обработать на одном баке
-    refill point: (r, -1) — слева от поля на той же строке
-
-    Возвращает:
-      full_route: список (r,c) где c может быть -1
-      refills: сколько раз заезжали пополняться
-      done_count: сколько работ сделали
-    """
     H,W = work_mask.shape
     if capacity <= 0:
         capacity = 1
@@ -232,7 +208,6 @@ def add_refills_to_route(base_route, work_mask, capacity, refill_left_col=-1):
 
 
 def padded_mask_for_display(mask2d):
-    """Добавляем слева 1 колонку для запасов."""
     H,W = mask2d.shape
     pad = np.zeros((H, W+1), dtype=mask2d.dtype)
     pad[:, 1:] = mask2d
@@ -240,15 +215,9 @@ def padded_mask_for_display(mask2d):
 
 
 def shift_route_for_display(route):
-    """Сдвиг по x на +1: c=-1 -> x=0 (запасы), c=0 -> x=1 (поле)."""
     rr = [r for (r,c) in route]
     cc = [c+1 for (r,c) in route]
     return rr, cc
-
-
-# ============================================================
-# АНИМАЦИЯ
-# ============================================================
 
 def draw_frame(ax, img, rr, cc, step, title=""):
     ax.clear()
@@ -275,12 +244,6 @@ def animate_route_streamlit(img, rr, cc, speed_fps=20, stride=3, title=""):
         draw_frame(ax, img, rr, cc, step, title=title)
         placeholder.pyplot(fig, clear_figure=False)
         time.sleep(delay)
-
-
-
-# ============================================================
-# STREAMLIT UI
-# ============================================================
 
 st.set_page_config(layout="wide")
 st.title("Автоматизация сельскохозяйственных операций")
@@ -349,10 +312,10 @@ if st.button("Сгенерировать"):
                 st.info("Нет клеток для этой операции.")
                 continue
 
-            # базовый маршрут "умной змейкой"
+            # умная змейка
             base = smart_snake_route_for_mask(op_mask)
 
-            # добавляем пополнения (выезды в c=-1)
+            # пополнения
             route, refills, done_count = add_refills_to_route(
                 base_route=base,
                 work_mask=op_mask,
@@ -360,7 +323,7 @@ if st.button("Сгенерировать"):
                 refill_left_col=-1
             )
 
-            # картинка для отображения (колонка слева = запасы)
+            # картинка для отображения
             disp_mask = padded_mask_for_display(op_mask.astype(int))
 
             rr, cc = shift_route_for_display(route)
@@ -400,5 +363,6 @@ if st.button("Сгенерировать"):
     ax2.axis("off")
     st.pyplot(fig2, clear_figure=True)
 
-    st.caption(f"Размер сетки: {H}×{W} | Клетка ~ {cell:.2f} м")
+    st.caption(f"Размер сетки: {H}×{W}, Клетка ~ {cell:.2f} м")
+
 
