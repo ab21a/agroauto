@@ -253,24 +253,15 @@ def shift_route_for_display(route):
 def draw_frame(ax, img, rr, cc, step, title=""):
     ax.clear()
     ax.imshow(img)
-    # след
-    ax.plot(cc[:step+1], rr[:step+1], linewidth=3)
-    # старт/финиш/трактор
-    ax.scatter([cc[0]], [rr[0]], s=120)
-    ax.scatter([cc[step]], [rr[step]], s=180, marker="s")  # трактор
-    ax.scatter([cc[-1]], [rr[-1]], s=120, marker="X")
+    ax.plot(cc[:step+1], rr[:step+1], linewidth=3)        # след
+    ax.scatter([cc[0]], [rr[0]], s=120)                   # старт
+    ax.scatter([cc[step]], [rr[step]], s=180, marker="s") # трактор
+    ax.scatter([cc[-1]], [rr[-1]], s=120, marker="X")     # финиш
     ax.axis("off")
     if title:
         ax.set_title(title)
 
-
 def animate_route_streamlit(img, rr, cc, speed_fps=20, stride=3, title=""):
-    """
-    img: 2D массив
-    rr, cc: координаты маршрута в координатах картинки
-    speed_fps: fps
-    stride: рисовать каждую stride-точку (ускоряет)
-    """
     placeholder = st.empty()
     fig, ax = plt.subplots(figsize=(9,9))
     delay = 1.0 / max(1, int(speed_fps))
@@ -282,8 +273,9 @@ def animate_route_streamlit(img, rr, cc, speed_fps=20, stride=3, title=""):
 
     for step in step_list:
         draw_frame(ax, img, rr, cc, step, title=title)
-        placeholder.pyplot(fig, clear_figure=True)
+        placeholder.pyplot(fig, clear_figure=False)
         time.sleep(delay)
+
 
 
 # ============================================================
@@ -409,3 +401,4 @@ if st.button("Сгенерировать"):
     st.pyplot(fig2, clear_figure=True)
 
     st.caption(f"Размер сетки: {H}×{W} | Клетка ~ {cell:.2f} м")
+
