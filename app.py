@@ -5,15 +5,25 @@ import matplotlib.pyplot as plt
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import f1_score, hamming_loss
 
 from tensorflow.keras import Sequential
-from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.layers import Dense, Dropout, SimpleRNN
 from tensorflow.keras.optimizers import Adam
+
+
+# =======================
+# ДАННЫЕ И НАСТРОЙКИ
+# =======================
+
 CSV = "dataset_russia_subjects_normalized.csv"
 FEATS = ["t2m", "swvl1", "tp", "lai_hv"]
 OPS_RU = ["Полив", "Удобрение", "Опрыскивание", "Культивация"]
-MAX_SIDE = 220
+
+
+# =======================
+# КУЛЬТУРЫ
+# =======================
+
 def culture_mult(c):
     c = (c or "").lower()
     return {
@@ -23,52 +33,63 @@ def culture_mult(c):
         "кукуруза": np.array([1.1,1,1,1.0]),
         "подсолнечник": np.array([1,1.1,1,0.9])
     }.get(c, np.ones(4))
+
+
+# =======================
+# ГЕНЕРАЦИЯ И МЕТКИ
+# =======================
+
 def generate_cell(mu, rng):
     return mu + rng.normal(0, 0.6, 4)
+
+
 def label_cell(x):
-    sig = lambda z: 1/(1+np.exp(-z))
-    t,m,r,l = sig(x[0]), sig(x[1]), sig(x[2]), sig(0.7*x[3])
-    stress = (abs(m-0.55)+abs(t-0.55)+max(0,0.6-r))/3
+    sig = lambda z: 1 / (1 + np.exp(-z))
+    t, m, r, l = sig(x[0]), sig(x[1]), sig(x[2]), sig(x[3])
+
+    stress = (abs(m-0.55) + abs(t-0.55) + max(0,0.6-r)) / 3
 
     s = np.array([
         0.7*(1-m) + 0.3*stress,
-        0.85*(1-l) + 0.15*stress,
+        0.8*(1-l) + 0.2*stress,
         0.6*r + 0.4*l,
         0.7*r + 0.3*stress
     ])
 
-    return (s > 0.55).astype(int)
+    return (s > 0.5).astype(int)
+
+
+# =======================
+# НЕЙРОСЕТЬ ДЕЙСТВИЙ
+# =======================
+
 def build_action_net():
     m = Sequential([
         Dense(128, activation='relu', input_dim=4),
         Dropout(0.3),
         Dense(64, activation='relu'),
         Dropout(0.3),
-        Dense(32, activation='relu'),
         Dense(4, activation='sigmoid')
     ])
     m.compile(optimizer=Adam(0.001), loss='binary_crossentropy')
     return m
-def fit_scalers(df):
-    scalers = {}
-    for r, sub in df.groupby("region_id"):
-        scalers[r] = StandardScaler().fit(sub[FEATS])
-    return scalers
+
+
 @st.cache_resource
 def train_action_net():
     df = pd.read_csv(CSV)
-    regions = sorted(df["region_id"].unique())
-    scalers = fit_scalers(df)
+    regions = df["region_id"].unique()
 
+    scalers = {r: StandardScaler().fit(df[df.region_id == r][FEATS])
+               for r in regions}
+
+    X, Y = [], []
     rng = np.random.default_rng(1)
     cultures = ["Пшеница","Рис","Картофель","Кукуруза","Подсолнечник"]
 
-    X, Y = [], []
-
-    for _ in range(12000):
+    for _ in range(10000):
         r = rng.choice(regions)
         c = rng.choice(cultures)
-
         sub = df[df.region_id == r]
         mu = sub[FEATS].mean().values
 
@@ -82,97 +103,104 @@ def train_action_net():
     Xtr, Xte, Ytr, Yte = train_test_split(X, Y, test_size=0.2)
 
     model = build_action_net()
-    model.fit(Xtr, Ytr, epochs=10, batch_size=256, verbose=0)
+    model.fit(Xtr, Ytr, epochs=8, batch_size=256, verbose=0)
 
     return df, regions, scalers, model
-def build_tractor_net():
+
+
+# =======================
+# НЕЙРОСЕТЬ ТРАКТОРА (RNN)
+# =======================
+
+def build_tractor_rnn():
     m = Sequential([
-        Dense(16, activation="relu", input_dim=2),
-        Dense(8, activation="relu"),
-        Dense(4, activation="softmax")
+        SimpleRNN(32, activation="tanh", input_shape=(None, 2)),
+        Dense(4, activation="softmax")  # 0↑ 1↓ 2← 3→
     ])
-    m.compile(
-        optimizer=Adam(0.001),
-        loss="sparse_categorical_crossentropy"
-    )
+    m.compile(optimizer=Adam(0.001), loss="sparse_categorical_crossentropy")
     return m
+
+
+def generate_snake_path(H, W):
+    path = []
+    for r in range(H):
+        cols = range(W) if r % 2 == 0 else range(W-1, -1, -1)
+        for c in cols:
+            path.append((r, c))
+    return path
+
+
 @st.cache_resource
 def train_tractor_net():
-    rng = np.random.default_rng(2)
     X, y = [], []
+    rng = np.random.default_rng(2)
 
-    for _ in range(6000):
-        r, c = rng.integers(0, 20, size=2)
-        X.append([r/20, c/20])
+    for _ in range(2000):
+        H, W = rng.integers(5, 20), rng.integers(5, 20)
+        path = generate_snake_path(H, W)
 
-        if r % 2 == 0:
-            y.append(3)  # вправо
-        else:
-            y.append(2)  # влево
+        for i in range(len(path)-1):
+            r, c = path[i]
+            r2, c2 = path[i+1]
 
-    m = build_tractor_net()
-    m.fit(np.array(X), np.array(y), epochs=3, batch_size=256, verbose=0)
-    return m
-DIRS = {
-    0: (-1, 0),  # вверх
-    1: (1, 0),   # вниз
-    2: (0, -1),  # влево
-    3: (0, 1)    # вправо
-}
-def tractor_recursive(r, c, field, model, path, visited):
-    if (r, c) in visited:
-        return
-    if not (0 <= r < field.shape[0] and 0 <= c < field.shape[1]):
-        return
+            X.append([[r/H, c/W]])
+            if r2 > r: y.append(1)
+            elif r2 < r: y.append(0)
+            elif c2 > c: y.append(3)
+            else: y.append(2)
 
-    visited.add((r, c))
-    path.append((r, c))
+    X = np.array(X)
+    y = np.array(y)
 
-    x = np.array([[r/field.shape[0], c/field.shape[1]]])
-    move = np.argmax(model.predict(x, verbose=0))
+    model = build_tractor_rnn()
+    model.fit(X, y, epochs=5, batch_size=128, verbose=0)
 
-    dr, dc = DIRS[move]
-    tractor_recursive(r+dr, c+dc, field, model, path, visited)
+    return model
+
+
+# =======================
+# STREAMLIT
+# =======================
+
 st.set_page_config(layout="wide")
-st.title("Автоматизация сельского хозяйства")
+st.title("Интеллектуальное управление сельхозтехникой")
 
 df, regions, scalers, action_model = train_action_net()
 tractor_model = train_tractor_net()
 
-c1,c2,c3 = st.columns(3)
-w = c1.number_input("Ширина поля (м)", 50, 1000, 200)
-h = c2.number_input("Длина поля (м)", 50, 1000, 200)
-spm = c3.number_input("Ячеек на метр", 1, 5, 1)
-
+w = st.number_input("Ширина поля (ячейки)", 1, 500, 30)
+h = st.number_input("Высота поля (ячейки)", 1, 500, 20)
 reg = st.selectbox("Регион", regions)
 cul = st.selectbox("Культура", ["Пшеница","Рис","Картофель","Кукуруза","Подсолнечник"])
-if st.button("Сгенерировать"):
-    H, W = int(h*spm), int(w*spm)
 
+if st.button("Сгенерировать карту и маршрут"):
     rng = np.random.default_rng(3)
-    sub = df[df.region_id == reg]
-    mu = sub[FEATS].mean().values
+    mu = df[df.region_id == reg][FEATS].mean().values
+    sc = scalers[reg]
 
-    raw = mu + rng.normal(0, 0.6, (H, W, 4))
-    x = scalers[reg].transform(raw.reshape(-1,4))
-    x *= culture_mult(cul)
+    raw = mu + rng.normal(0, 0.6, (h, w, 4))
+    X = sc.transform(raw.reshape(-1, 4)) * culture_mult(cul)
 
-    act = (action_model.predict(x) > 0.5).astype(int).reshape(H,W,4)
-    mask = act.any(axis=-1)
+    act = (action_model.predict(X, verbose=0) > 0.5).astype(int)
+    act = act.reshape(h, w, 4)
 
-    fig, axs = plt.subplots(2,2, figsize=(9,9))
+    fig, axs = plt.subplots(2, 2, figsize=(8,8))
     for i in range(4):
-        axs.flat[i].imshow(act[:,:,i])
+        axs.flat[i].imshow(act[...,i])
         axs.flat[i].set_title(OPS_RU[i])
         axs.flat[i].axis("off")
     st.pyplot(fig)
 
-    path = []
-    tractor_recursive(0, 0, mask, tractor_model, path, set())
+    # маршрут
+    path = generate_snake_path(h, w)
+    rr = [p[0] for p in path]
+    cc = [p[1] for p in path]
 
-    fig2, ax = plt.subplots(figsize=(8,8))
-    ax.imshow(mask)
-    ax.plot([p[1] for p in path], [p[0] for p in path], linewidth=2)
-    ax.set_title("Рекурсивный маршрут трактора")
+    fig2, ax = plt.subplots(figsize=(8,6))
+    ax.imshow(act.any(axis=-1), cmap="Greens")
+    ax.plot(cc, rr, linewidth=2, color="red")
+    ax.scatter(cc[0], rr[0], c="blue", s=80)
+    ax.scatter(cc[-1], rr[-1], c="black", s=80, marker="X")
+    ax.set_title("Маршрут трактора")
     ax.axis("off")
     st.pyplot(fig2)
