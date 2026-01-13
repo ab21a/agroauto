@@ -1,10 +1,7 @@
-import time
 import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-
-from collections import deque
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
@@ -101,157 +98,63 @@ def train_action_net():
     }
 
 
+
+def build_tractor_net():
+    m = Sequential([
+        Dense(16, activation="relu", input_dim=3),
+        Dense(8, activation="relu"),
+        Dense(4, activation="softmax")
+    ])
+    m.compile(optimizer=Adam(0.001), loss="sparse_categorical_crossentropy")
+    return m
+
+
+def expert_dir(r,c,H,W):
+    if r%2==0:
+        return 3 if c<W-1 else 1
+    return 2 if c>0 else 1
+
+
+@st.cache_resource
+def train_tractor_net():
+    rng = np.random.default_rng(1)
+    X,y = [],[]
+    for _ in range(9000):
+        H = rng.integers(8,25)
+        W = rng.integers(8,25)
+        r = rng.integers(0,H)
+        c = rng.integers(0,W)
+        X.append([r/max(1,H-1), c/max(1,W-1), r%2])
+        y.append(expert_dir(r,c,H,W))
+    m = build_tractor_net()
+    m.fit(np.array(X), np.array(y), epochs=2, batch_size=256, verbose=0)
+    return m
+
+
+def tractor_route_snake(H, W):
+
+    path = []
+    for r in range(H):
+        if r % 2 == 0:
+            for c in range(W):
+                path.append((r, c))
+        else:
+            for c in range(W - 1, -1, -1):
+                path.append((r, c))
+    return path
+
+
 def grid_size(w,h,spm):
     H0,W0=int(h*spm),int(w*spm)
     s=max(1,int(np.ceil(max(H0/MAX_SIDE,W0/MAX_SIDE))))
     return max(1,H0//s),max(1,W0//s),s/spm
 
-DIRS4 = [(-1,0),(1,0),(0,-1),(0,1)]
-
-def in_bounds_ext(r,c,H,W):
-    return 0 <= r < H and (-1 <= c < W)
-
-def manhattan_path_ext(a, b):
-    (r1,c1),(r2,c2) = a,b
-    path=[(r1,c1)]
-    r,c=r1,c1
-    while r != r2:
-        r += 1 if r2>r else -1
-        path.append((r,c))
-    while c != c2:
-        c += 1 if c2>c else -1
-        path.append((r,c))
-    return path
-
-
-def smart_snake_route_for_mask(mask2d):
-    H,W = mask2d.shape
-    if not mask2d.any():
-        return [(0,0)]
-
-    segments = []
-    for r in range(H):
-        cols = np.where(mask2d[r])[0]
-        if len(cols)==0:
-            continue
-        segments.append((r, int(cols.min()), int(cols.max())))
-    segments.sort(key=lambda x: x[0])
-
-    path = [(0,0)]
-    cur = (0,0)
-
-    for i,(r,cmin,cmax) in enumerate(segments):
-        left_to_right = (i % 2 == 0)
-        entry = (r, cmin) if left_to_right else (r, cmax)
-
-        segmove = manhattan_path_ext(cur, entry)
-        path.extend(segmove[1:])
-        cur = entry
-
-        if left_to_right:
-            for c in range(cmin, cmax+1):
-                if (r,c) != cur:
-                    path.append((r,c))
-                    cur = (r,c)
-        else:
-            for c in range(cmax, cmin-1, -1):
-                if (r,c) != cur:
-                    path.append((r,c))
-                    cur = (r,c)
-
-    return path
-
-
-def add_refills_to_route(base_route, work_mask, capacity, refill_left_col=-1):
-    H,W = work_mask.shape
-    if capacity <= 0:
-        capacity = 1
-
-    if not work_mask.any():
-        return base_route, 0, 0
-
-    pending = work_mask.copy()
-    fuel = capacity
-    refills = 0
-    full_route = [base_route[0]]
-    cur = base_route[0]
-
-    def go_to(point):
-        nonlocal cur, full_route
-        seg = manhattan_path_ext(cur, point)
-        full_route.extend(seg[1:])
-        cur = point
-
-    total_work = int(pending.sum())
-    done_count = 0
-
-    for nxt in base_route[1:]:
-        go_to(nxt)
-
-        r,c = cur
-        if 0 <= c < W and pending[r,c]:
-            if fuel == 0:
-                # заехать пополниться слева, вернуться
-                go_to((r, refill_left_col))
-                refills += 1
-                fuel = capacity
-                go_to((r, c))
-
-            pending[r,c] = False
-            fuel -= 1
-            done_count += 1
-
-            if done_count >= total_work:
-                break
-
-    return full_route, refills, done_count
-
-
-def padded_mask_for_display(mask2d):
-    H,W = mask2d.shape
-    pad = np.zeros((H, W+1), dtype=mask2d.dtype)
-    pad[:, 1:] = mask2d
-    return pad
-
-
-def shift_route_for_display(route):
-    rr = [r for (r,c) in route]
-    cc = [c+1 for (r,c) in route]
-    return rr, cc
-
-def draw_frame(ax, img, rr, cc, step, title=""):
-    ax.clear()
-    ax.imshow(img)
-    ax.plot(cc[:step+1], rr[:step+1], linewidth=3)        # след
-    ax.scatter([cc[0]], [rr[0]], s=120)                   # старт
-    ax.scatter([cc[step]], [rr[step]], s=180, marker="s") # трактор
-    ax.scatter([cc[-1]], [rr[-1]], s=120, marker="X")     # финиш
-    ax.axis("off")
-    if title:
-        ax.set_title(title)
-
-def animate_route_streamlit(img, rr, cc, speed_fps=20, stride=3, title=""):
-    placeholder = st.empty()
-    fig, ax = plt.subplots(figsize=(9,9))
-    delay = 1.0 / max(1, int(speed_fps))
-    n = len(rr)
-
-    step_list = list(range(0, n, max(1, int(stride))))
-    if step_list[-1] != n-1:
-        step_list.append(n-1)
-
-    for step in step_list:
-        draw_frame(ax, img, rr, cc, step, title=title)
-        placeholder.pyplot(fig, clear_figure=False)
-        time.sleep(delay)
 
 st.set_page_config(layout="wide")
 st.title("Автоматизация сельскохозяйственных операций")
 
-df, regions, scalers, action_model, metrics = train_action_net()
-
-with st.expander("Метрики модели операций"):
-    st.write(metrics)
+df,regions,scalers,action_model,_ = train_action_net()
+tractor_model = train_tractor_net()
 
 c1,c2,c3 = st.columns(3)
 w = c1.number_input("Ширина поля (м)",1,1_000_000,200,10)
@@ -262,37 +165,18 @@ c4,c5 = st.columns(2)
 reg = c4.selectbox("Регион", regions)
 cul = c5.selectbox("Культура", ["Пшеница","Рис","Картофель","Кукуруза","Подсолнечник"])
 
-H, W, cell = grid_size(float(w), float(h), int(spm))
-
-st.subheader("Запасы (ёмкости) для операций (1 ед. = обработка 1 клетки)")
-cc1,cc2,cc3,cc4 = st.columns(4)
-cap = [
-    cc1.number_input(f"Ёмкость: {OPS_RU[0]} (клеток)", 1, 1_000_000, 300, 10),
-    cc2.number_input(f"Ёмкость: {OPS_RU[1]} (клеток)", 1, 1_000_000, 220, 10),
-    cc3.number_input(f"Ёмкость: {OPS_RU[2]} (клеток)", 1, 1_000_000, 180, 10),
-    cc4.number_input(f"Ёмкость: {OPS_RU[3]} (клеток)", 1, 1_000_000, 260, 10),
-]
-st.caption("Считаем, что запасы находятся слева от поля (служебная полоса). Когда запас кончается, трактор едет на c=-1 и возвращается.")
-
-st.subheader("Анимация")
-a1,a2,a3 = st.columns(3)
-do_anim = a1.checkbox("Анимировать движение трактора", value=True)
-fps = a2.number_input("Скорость (fps)", 1, 60, 20, 1)
-stride = a3.number_input("Шаг (ускорение, 1=каждая точка)", 1, 50, 3, 1)
+H,W,cell = grid_size(float(w),float(h),int(spm))
 
 if st.button("Сгенерировать"):
     rng = np.random.default_rng(2)
     sub = df[df.region_id==reg]
     mu = sub[FEATS].mean().values
-    sc = scalers.get(reg, scalers["__g__"])
-
+    sc = scalers.get(reg,scalers["__g__"])
     raw = mu + rng.normal(0,0.6,(H,W,4))
     x = sc.transform(raw.reshape(-1,4)) * culture_mult(cul)
     act = (action_model.predict(x,verbose=0)>0.5).astype(int).reshape(H,W,4)
+    mask = act.any(axis=-1)
 
-    mask_any = act.any(axis=-1)
-
-    # Карты операций
     fig1,axs = plt.subplots(2,2,figsize=(9,9))
     for i in range(4):
         axs.flat[i].imshow(act[...,i])
@@ -300,67 +184,14 @@ if st.button("Сгенерировать"):
         axs.flat[i].axis("off")
     st.pyplot(fig1,clear_figure=True)
 
-    st.subheader("Маршруты трактора по операциям (с выездами за пополнением)")
-    tabs = st.tabs([OPS_RU[i] for i in range(4)])
+    p = tractor_route_snake(H,W)
 
-    for op in range(4):
-        with tabs[op]:
-            op_mask = act[...,op].astype(bool)
-            total_cells = int(op_mask.sum())
-
-            if total_cells == 0:
-                st.info("Нет клеток для этой операции.")
-                continue
-
-            # умная змейка
-            base = smart_snake_route_for_mask(op_mask)
-
-            # пополнения
-            route, refills, done_count = add_refills_to_route(
-                base_route=base,
-                work_mask=op_mask,
-                capacity=int(cap[op]),
-                refill_left_col=-1
-            )
-
-            # картинка для отображения
-            disp_mask = padded_mask_for_display(op_mask.astype(int))
-
-            rr, cc = shift_route_for_display(route)
-
-            if do_anim:
-                animate_route_streamlit(
-                    img=disp_mask,
-                    rr=rr,
-                    cc=cc,
-                    speed_fps=int(fps),
-                    stride=int(stride),
-                    title=f"{OPS_RU[op]} (ёмкость={int(cap[op])}, пополнений={refills})"
-                )
-            else:
-                fig, ax = plt.subplots(figsize=(9,9))
-                ax.imshow(disp_mask)
-                ax.plot(cc, rr, linewidth=3)
-                ax.scatter([cc[0]],[rr[0]],s=120)
-                ax.scatter([cc[-1]],[rr[-1]],s=120,marker="X")
-                ax.axis("off")
-                st.pyplot(fig, clear_figure=True)
-
-            route_len_cells = max(0, len(route)-1)
-            st.caption(
-                f"Операция: {OPS_RU[op]} | "
-                f"Клеток работы: {total_cells} | "
-                f"Сделано: {done_count} | "
-                f"Пополнений: {refills} | "
-                f"Длина маршрута (клеток): {route_len_cells} | "
-                f"Клетка ~ {cell:.2f} м | "
-                f"Оценка пробега ~ {route_len_cells * cell:.1f} м"
-            )
-
-    st.subheader("Общая карта: где есть хотя бы одна операция")
-    fig2, ax2 = plt.subplots(figsize=(9,9))
-    ax2.imshow(mask_any)
-    ax2.axis("off")
-    st.pyplot(fig2, clear_figure=True)
-
-    st.caption(f"Размер сетки: {H}×{W}, Клетка ~ {cell:.2f} м")
+    fig2,ax = plt.subplots(figsize=(9,9))
+    ax.imshow(mask)
+    rr=[i[0] for i in p]
+    cc=[i[1] for i in p]
+    ax.plot(cc,rr,linewidth=3)
+    ax.scatter([cc[0]],[rr[0]],s=120)
+    ax.scatter([cc[-1]],[rr[-1]],s=120,marker="X")
+    ax.axis("off")
+    st.pyplot(fig2,clear_figure=True)
